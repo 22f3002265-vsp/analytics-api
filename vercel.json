@@ -1,9 +1,0 @@
-
-{
-  "rewrites": [
-    {
-      "source": "/analytics",
-      "destination": "/api/index"
-    }
-  ]
-}
