@@ -4,12 +4,11 @@ import math
 from collections import defaultdict
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Allow browser-based requests from the grader.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,21 +18,27 @@ app.add_middleware(
 )
 
 
+@app.options("/analytics")
+async def analytics_options():
+    return JSONResponse(
+        status_code=204,
+        content=None,
+    )
+
+
 @app.post("/analytics")
 async def analytics(request: Request):
-    # Authenticate using the configured API key.
-    expected_key = os.environ.get("API_KEY")
+    # Use the exact assigned key stored in Vercel.
+    expected_key = os.environ.get("API_KEY", "")
+    supplied_key = request.headers.get("X-API-Key", "")
 
-    if (
-        not expected_key
-        or request.headers.get("X-API-Key") != expected_key
-    ):
+    # Reject missing or incorrect keys.
+    if not expected_key or supplied_key != expected_key:
         return JSONResponse(
             status_code=401,
             content={"error": "Unauthorized"},
         )
 
-    # Parse and validate the request body.
     try:
         body = await request.json()
     except Exception:
@@ -47,9 +52,7 @@ async def analytics(request: Request):
     ):
         return JSONResponse(
             status_code=400,
-            content={
-                "error": "Request body must contain an events array"
-            },
+            content={"error": "Invalid events array"},
         )
 
     events = body["events"]
@@ -57,37 +60,38 @@ async def analytics(request: Request):
     user_revenue = defaultdict(float)
     revenue = 0.0
 
-    # Calculate totals from the submitted batch.
     for event in events:
+        if not isinstance(event, dict):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid event"},
+            )
+
+        user = event.get("user")
+        amount = event.get("amount")
+
         if (
-            not isinstance(event, dict)
-            or not isinstance(event.get("user"), str)
-            or isinstance(event.get("amount"), bool)
-            or not isinstance(event.get("amount"), (int, float))
-            or not math.isfinite(event["amount"])
+            not isinstance(user, str)
+            or isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or not math.isfinite(amount)
         ):
             return JSONResponse(
                 status_code=400,
-                content={
-                    "error": "Each event must have a string user "
-                             "and finite numeric amount"
-                },
+                content={"error": "Invalid event fields"},
             )
-
-        user = event["user"]
-        amount = event["amount"]
 
         users.add(user)
 
-        # Only positive amounts count toward revenue and top_user.
         if amount > 0:
             revenue += amount
             user_revenue[user] += amount
 
-    # Find the user with the highest positive-amount total.
-    top_user = None
-    if user_revenue:
-        top_user = max(user_revenue, key=user_revenue.get)
+    top_user = (
+        max(user_revenue, key=user_revenue.get)
+        if user_revenue
+        else None
+    )
 
     return {
         "email": os.environ.get("GRADER_EMAIL", ""),
@@ -96,6 +100,3 @@ async def analytics(request: Request):
         "revenue": round(revenue, 10),
         "top_user": top_user,
     }
-
-
-# Vercel's Python runtime can use the ASGI app above.
